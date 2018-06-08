@@ -32,8 +32,9 @@ class EigenData2:
     Examples:
     ----------
     To get the table for element 'Helium' at Te=5.0e5K:
+
     >>> table = EigenData2(element=2)
-    >>> table.temperature=5.0e5k
+    >>> table.temperature=5.0e5
 
     Output eigenvals:
     >>> table.eigenvalues()
@@ -273,6 +274,7 @@ class EigenData2:
             return self._eigenvector_inverses[self._te_index, :, :]
         else:
             raise AttributeError("The temperature has not been set.")
+
 
     def equilibrium_state(self, T_e=None, T_e_index=None):
         """Returns the equilibrium charge state distribution for the
