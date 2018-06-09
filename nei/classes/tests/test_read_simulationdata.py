@@ -13,21 +13,108 @@ import nei as nei
 from scipy.io import readsav
 import pytest
 from sys import stdout
-#import matplotlib.pyplot as plt
-
-#-------------------------------------------------------------------------------
-# Set elements and temperary list as testing inputs
-#-------------------------------------------------------------------------------
-natom_list = np.arange(1, 27)
-natom = 8
 
 
-#------------------------------------------------------------------------------
-# function: Time-Advance solover
-#------------------------------------------------------------------------------
+def test_nei_multisteps(natom=8):
+    """
+        Read temprature and density history file and perfrom NEI calculations.
+        Starting the equilibrium states, and set any time-step in here
+        (adaptive time-step is required in practice).
+    """
+    #
+    # Read Te and rho profiles
+    #
+    file_path = '/Users/chshen/Works/Project/REU/REU_2018/2018_SummerProject/cr1913_traj_180601/'
+    files = sorted(glob.glob(file_path + '*.sav'))
+
+    for file in files:
+        data = readsav(file, python_dict=True)
+        time = data['time']  # unit: [s]
+        te = data['te']  # unit: [K]
+        rho = data['rho']  # unit: [cm^-3]
+        v = data['v']  # unit: [km/s]
+        r = data['r']  # r position in sphericalcoordinate: [Rolar radio]
+        t = data['t']  # t position in sphericalcoordinate: [0 ~ PI]
+        p = data['p']  # p position in sphericalcoordinate: [0 ~ 2PI]
+
+        #
+        # NEI calculations parametes: dt and element
+        #
+        dt = 0.1  # 0.1s
+
+        # Start from equilibrium ionizaiont(EI) states
+        time_current = 0
+        table = nei.EigenData2(element=natom)
+        f_ini = table.equilibrium_state(T_e=te[0])
+
+        print('START:')
+        print(f'time_sta = ', time_current, te[0])
+        print(f_ini)
+
+        # Get adaptive time-step
+        newprofile = adaptive_time_step(te, rho, time, table)
+        print(f"Origin points = ", len(te))
+        dt_min = 10000.0
+        for i in range(1, newprofile["ntime"]):
+            dt_c = newprofile["time"][i] - newprofile["time"][i - 1]
+            if (dt_c <= dt_min):
+                dt_min = dt_c
+
+        print(f"Adaptive time-step =", newprofile["ntime"], "min_dt=", dt_min)
+
+        # Enter the time-advance using the adaptive time-step:
+        f0 = np.copy(f_ini)
+        for i in range(1, newprofile["ntime"]):
+            im = i - 1
+            ic = i
+            dt_mc = math.fabs(newprofile["time"][ic] - newprofile["time"][im])
+            te_mc = newprofile["te"][im]
+            ne_mc = 0.5 * (newprofile["ne"][im] + newprofile["ne"][ic])
+            ft = func_solver_eigenval(natom, te_mc, ne_mc, dt_mc, f0, table)
+            f0 = np.copy(ft)
+            stdout.write("\r%f" % time_current)
+            stdout.flush()
+        stdout.write("\n")
+        f_nei_ada_time = ft
+        print(f"NEI(adt)={f_nei_ada_time}")
+
+        # Enter the time loop using constant time-step = 0.1s:
+        f0 = np.copy(f_ini)
+        while time_current < time[-1]:
+            # The original time interval is 1.4458s in this test
+            te_current = np.interp(time_current, time, te)
+            ne_current = 0.5 * (np.interp(time_current, time, rho) + np.interp(
+                time_current + dt, time, rho))
+            ft = func_solver_eigenval(natom, te_current, ne_current, dt, f0,
+                                      table)
+            f0 = np.copy(ft)
+            time_current = time_current + dt
+            stdout.write("\r%f" % time_current)
+            stdout.flush()
+        stdout.write("\n")
+
+        # The last step
+        dt = time[-1] - time_current
+        te_current = np.interp(time_current, time, te)
+        ne_current = np.interp(time_current, time, rho)
+        ft = func_solver_eigenval(natom, te_current, ne_current, dt, f0, table)
+
+        # final results
+        f_ei_end = table.equilibrium_state(T_e=te[-1])
+
+        print(f'time_end = ', time_current, te[-1])
+        print(f"EI :", f_ei_end)
+        print(f"NEI(cdt)={ft}")
+
+        #
+        # Output results
+        #
+    return 1
+
+
 def func_solver_eigenval(natom, te, ne, dt, f0, table):
     """
-        The testing function for performing time_advance calculations.
+        The function for one step time_advance.
     """
 
     common_index = table._get_temperature_index(te)
@@ -56,7 +143,7 @@ def func_solver_eigenval(natom, te, ne, dt, f0, table):
     return ft
 
 
-def adaptive_time_step(tein, nein, timein, table, accuracy_factot=0.01):
+def adaptive_time_step(tein, nein, timein, table, accuracy_factot=1.0e-7):
     """
         A method to get adaptive time steps along the Temperature(or density)
         profile. The new time nodes will be created according to
@@ -79,12 +166,14 @@ def adaptive_time_step(tein, nein, timein, table, accuracy_factot=0.01):
         raise NameError
 
     # Te grid interval from Eigentables.
-    dte_grid = table._temperature_grid_interval
+    dte_grid = math.log10(table.temperature_grid[1]) \
+    - math.log10(table.temperature_grid[0])
 
     # Step (1): Check how many points can be skipped based on the dte_grid?
     # Initialize array to save results.
     timenew = [timein[0]]
     timenew_index = [0]
+    te_last_point = tein[0]
 
     for i in range(1, ntime):
         # Set time index: m means 'minus', and c means 'current'.
@@ -95,13 +184,14 @@ def adaptive_time_step(tein, nein, timein, table, accuracy_factot=0.01):
         tem = tein[im]
         tec = tein[ic]
         dte_current = math.fabs(math.log10(tec) \
-                    - math.fabs(math.log10(tem)))
+                    - math.fabs(math.log10(te_last_point)))
 
         # Compare it with dte_grid.
         if (dte_current >= dte_grid):
             # Keep this points
             timenew.append(timein[ic])
             timenew_index.append(ic)
+            te_last_point = tein[ic]
 
     # Step (2): Re-check the survivors and see if they can be skipped based on
     # Eigenvalues
@@ -162,7 +252,7 @@ def adaptive_time_step(tein, nein, timein, table, accuracy_factot=0.01):
         # Compare it with dte_grid
         if (dte_current < dte_grid):
             # Keep the same point
-            timenew3.append(timec)
+            timenew3_index.append(ic)
             tenew3.append(tec)
             nenew3.append(nec)
         else:
@@ -183,86 +273,16 @@ def adaptive_time_step(tein, nein, timein, table, accuracy_factot=0.01):
             tenew3.append(tec)
             nenew3.append(nec)
 
+    # TO DO:
+    # Compute average density between two chosen points
+    # ...
+
     # Set a dictionary to save/return results
     outprofile = {
         "time": timenew3,
         "te": tenew3,
         "ne": nenew3,
+        "ne_avg": neavg,
         "ntime": len(timenew3)
     }
     return outprofile
-
-
-def test_nei_multisteps(natom=8):
-    """
-        Read temprature and density history file and perfrom NEI calculations.
-        Starting the equilibrium states, and set any time-step in here
-        (adaptive time-step is required in practice).
-    """
-    #
-    # Read Te and rho profiles
-    #
-    file_path = '/Users/chshen/Works/Project/ionization/NEI/nei/data/2018_SummerProject/cr1913_traj_180601/'
-    files = sorted(glob.glob(file_path + '*.sav'))
-
-    for file in files:
-        data = readsav(file, python_dict=True)
-        time = data['time']  # unit: [s]
-        te = data['te']  # unit: [K]
-        rho = data['rho']  # unit: [cm^-3]
-        v = data['v']  # unit: [km/s]
-        r = data['r']  # r position in sphericalcoordinate: [Rolar radio]
-        t = data['t']  # t position in sphericalcoordinate: [0 ~ PI]
-        p = data['p']  # p position in sphericalcoordinate: [0 ~ 2PI]
-
-        #
-        # NEI calculations parametes: dt and element
-        #
-        dt = 0.1  # 0.1s
-
-        # Start from equilibrium ionizaiont(EI) states
-        time_current = 0
-        table = nei.EigenData2(element=natom)
-        f0 = table.equilibrium_state(T_e=te[0])
-        f_ei_sta = f0
-
-        print('START:')
-        print(f'time_sta = ', time_current, te[0])
-        print(f_ei_sta)
-
-        # Get adaptive time-step
-        newprofile = adaptive_time_step(te, rho, time, table)
-        print(newprofile.)
-        break
-
-        # Enter the time loop:
-        while time_current < time[-1]:
-            # The original time interval is 1.4458s in this test
-            te_current = np.interp(time_current, time, te)
-            ne_current = np.interp(time_current, time, rho)
-            ft = func_solver_eigenval(natom, te_current, ne_current, dt, f0,
-                                      table)
-            f0 = np.copy(ft)
-            time_current = time_current + dt
-            stdout.write("\r%f" % time_current)
-            stdout.flush()
-        stdout.write("\n")
-
-        # The last step
-        dt = time[-1] - time_current
-        te_current = np.interp(time_current, time, te)
-        ne_current = np.interp(time_current, time, rho)
-        ft = func_solver_eigenval(natom, te_current, ne_current, dt, f0, table)
-
-        # final results
-        f_nei = ft
-        f_ei_end = table.equilibrium_state(T_e=te[-1])
-
-        print(f'time_end = ', time_current, te[-1])
-        print(f"EI :", f_ei_end)
-        print(f'NEI:', ft)
-
-        #
-        # Output results
-        #
-    return
