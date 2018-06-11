@@ -21,7 +21,7 @@ def create_te_ne_profile(icase=0):
         Temperature and density profiles creator.
     """
     if (icase == 0):
-        ntime = 100000
+        ntime = 36000
         te_sta = 1.0e5  # Unit: [K]
         te_end = 1.0e7
         ne_max = 1.0e12  # Unit: [cm^-3]
@@ -34,7 +34,7 @@ def create_te_ne_profile(icase=0):
         return {"te_arr": te_arr, "ne_arr": ne_arr, "time_arr": time_arr}
 
 
-def test_adapt_time_step(natom=2):
+def test_adapt_time_step(natom=26):
     """
         Set a set of Te/ne profiles. Perfrom NEI calculations using adaptive
         time-step method and compare it with constant dt results.
@@ -53,9 +53,9 @@ def test_adapt_time_step(natom=2):
         table = nei.EigenData2(element=natom)
         f_ini = table.equilibrium_state(T_e=te_arr[0])
 
-        # Case 1: Adaptive time-step:
+        # Method 1: Adaptive time-step:
         newprofile = adaptive_time_step(
-            te_arr, rho_arr, time_arr, table, accuracy_factor=1.0e-2)
+            te_arr, rho_arr, time_arr, table, accuracy_factor=1.0e-3)
         print(f"Origin sampling points = ", len(te_arr))
         dt_min = 10000.0
         for i in range(1, newprofile["ntime"]):
@@ -63,8 +63,7 @@ def test_adapt_time_step(natom=2):
             if (dt_c <= dt_min):
                 dt_min = dt_c
 
-        print(f"Adaptive samplinge points =", newprofile["ntime"], "Min_dt=",
-              dt_min)
+        print(f"Adaptive samplinge points =", newprofile["ntime"])
         print(
             f"Time = {time_arr[-1]}, Te_sta={te_arr[0]}, Te_end={te_arr[-1]}")
         print(f"EI_start={f_ini}")
@@ -88,22 +87,22 @@ def test_adapt_time_step(natom=2):
             f0 = np.copy(ft)
 
         f_nei_ada_time = ft
-        print(f"NEI(adt)={f_nei_ada_time}")
+        print(f"Min_dt= {dt_min}")
+        print(f"NEI(adapt_dt)={f_nei_ada_time}")
 
-        # Case 2: Constant time-step:
+        # Method 2: Constant time-step:
         f0 = np.copy(f_ini)
         time_current = 0.0
-        dt = 1.0
+        dt_const = 0.05
         while time_current < time_arr[-1]:
-            # The original time interval is 1.4458s in this test
             te_current = np.interp(time_current, time_arr, te_arr)
             ne_current = 0.5 * (
                 np.interp(time_current, time_arr, rho_arr) + np.interp(
-                    time_current + dt, time_arr, rho_arr))
-            ft = func_solver_eigenval(natom, te_current, ne_current, dt, f0,
-                                      table)
+                    time_current + dt_const, time_arr, rho_arr))
+            ft = func_solver_eigenval(natom, te_current, ne_current, dt_const,
+                                      f0, table)
             f0 = np.copy(ft)
-            time_current = time_current + dt
+            time_current = time_current + dt_const
             stdout.write("\r%f" % time_current)
             stdout.flush()
         stdout.write("\n")
@@ -115,7 +114,8 @@ def test_adapt_time_step(natom=2):
 
         # final results
         f_ei_end = table.equilibrium_state(T_e=te_arr[-1])
-        print(f"NEI(cdt)={ft_nei}")
+        print(f"const_dt = {dt_const}")
+        print(f"NEI(const_dt)={ft_nei}")
         diff_adp_cdt = (ft_nei - f_nei_ada_time) / np.amax(
             [ft_nei, f_nei_ada_time])
         print(f"Dif_a&c ={diff_adp_cdt}")
@@ -271,7 +271,7 @@ def adaptive_time_step(tein, nein, timein, table, accuracy_factor=1.0e-4):
         itime_end = res[0][0]
         ditime = itime_end - itime_sta
         if (ditime >= 1):
-            # Include density contributed by skipped sampling points
+            # Density contributed by skipped sampling points
             rho_piece = nein[itime_sta:itime_end + 1]
             time_piece = timein[itime_sta:itime_end + 1]
             dt_time = time_ic - time_im
